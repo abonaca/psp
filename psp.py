@@ -355,6 +355,7 @@ substar
 y
 {1}.lst
 
+
 exit
 END_DAOPHOT""".format(self.optname, self.name)
 		
@@ -433,6 +434,7 @@ def set_indopts(fname, opts):
 def test(fname):
 	"""Testing new photometric pipeline"""
 	
+	## print to file, so there's a record of used options
 	# global options
 	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'sigma_psf': 4.5, 'sigma_all': 2.}}
 	
@@ -474,7 +476,7 @@ def test(fname):
 	finder(fname)
 	aper(fname)
 	
-	# once initial find run, determine fwhm, update it in opts
+	## once initial find run, determine fwhm, update it in opts
 	
 	# options for psf finding
 	opts['daophot']['sigma_th']=opts['misc']['sigma_psf']
@@ -499,6 +501,8 @@ def test(fname):
 	# subtract neighbors
 	nstar(psfname)
 	sub(psfname)
+	
+	## figure why subtract img saving doesn't work on dept computers
 	
 	# use neighbor-subtracted image for measuring psf
 	move(name+"_psf.fits", name+"_psf_old.fits")
