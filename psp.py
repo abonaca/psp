@@ -56,19 +56,20 @@ class Dao(object):
 		if general_name:
 			optname = op_type+".opt"
 			
-		if general_name & (self.cmd=='allstar'):
-			optname = self.dr+'/'+op_type+".opt"
-		
+		#if general_name & (self.cmd=='allstar'):
+			#optname = self.dr+'/'+op_type+".opt"
+				
 		if optname==None:
-			self.optname = self.name.replace("/","").replace("..","")+op_type+".opt"
+			self.optname = self.ofname+op_type+".opt"
 		else:
 			self.optname = optname
 		
+
 		# check which parameters remain default
 		dkeys = [x for x in OPTS_KEYS[op_type].keys() if x not in pars.keys()]
 		
 		# write options file
-		f = open(self.optname, 'w')
+		f = open(self.dr+'/'+self.optname, 'w')
 		
 		# input parameters
 		for k in pars.keys():
@@ -85,9 +86,9 @@ class Dao(object):
 		# build command
 		cmd = [self.cmd]
 		cmd.extend(args)
-		cwd = None
-		if (self.cmd == 'allstar') & (len(self.dr)>0):
-			cwd = self.dr
+		#cwd = None
+		#if (self.cmd == 'allstar') & (len(self.dr)>0):
+		cwd = self.dr
 		
 		# run command
 		p = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, cwd=cwd)
@@ -144,7 +145,7 @@ find
 y
 
 exit
-END_DAOPHOT""".format(self.optname, self.opts['misc']['stacknum'], self.name)
+END_DAOPHOT""".format(self.optname, self.opts['misc']['stacknum'], self.ofname)
 		
 		# call daophot find
 		stdout = self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -177,7 +178,7 @@ photometry
 {1}.ap
 
 exit
-END_DAOPHOT""".format(self.optname, self.name)
+END_DAOPHOT""".format(self.optname, self.ofname)
 		
 		# call daophot aperture photometry
 		stdout = self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -208,7 +209,7 @@ pickpsf
 {1}.lst
 
 exit
-END_DAOPHOT""".format(self.optname, self.name, self.opts['misc']['maglim'])
+END_DAOPHOT""".format(self.optname, self.ofname, self.opts['misc']['maglim'])
 		
 		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -237,7 +238,7 @@ psf
 {1}.psf
 
 exit
-END_DAOPHOT""".format(self.optname, self.name)
+END_DAOPHOT""".format(self.optname, self.ofname)
 		
 		# call daophot cmd
 		stdout = self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -292,7 +293,7 @@ group
 {1}.grp
 
 exit
-END_DAOPHOT""".format(self.optname, self.name)
+END_DAOPHOT""".format(self.optname, self.ofname)
 		
 		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -328,7 +329,7 @@ nstar
 {1}.nst
 
 exit
-END_DAOPHOT""".format(self.optname, self.name)
+END_DAOPHOT""".format(self.optname, self.ofname)
 		
 		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -354,10 +355,11 @@ substar
 {1}.nst
 y
 {1}.lst
+{1}.sub
 
 
 exit
-END_DAOPHOT""".format(self.optname, self.name)
+END_DAOPHOT""".format(self.optname, self.ofname)
 		
 		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
@@ -436,7 +438,7 @@ def test(fname):
 	
 	## print to file, so there's a record of used options
 	# global options
-	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'sigma_psf': 4.5, 'sigma_all': 2.}}
+	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'sigma_psf': 4.5, 'sigma_all': 3.5}}
 	
 	# image
 	#fname = "test.fits"
@@ -502,11 +504,9 @@ def test(fname):
 	nstar(psfname)
 	sub(psfname)
 	
-	## figure why subtract img saving doesn't work on dept computers
-	
 	# use neighbor-subtracted image for measuring psf
 	move(name+"_psf.fits", name+"_psf_old.fits")
-	move(name+"_psfs.fits", psfname)
+	move(name+"_psf.sub", psfname)
 	
 	# final psf
 	bad_list = psf(psfname)
@@ -524,7 +524,7 @@ def test(fname):
 	astar(fname)
 	
 	# remove options files
-	trash = glob.glob('*%s*.opt'%ofname)
+	trash = glob.glob(dr+'/*%s*.opt'%ofname)
 	#trash.extend(glob.glob('*.opt'))
 	trash.extend([name+"_psf.fits", name+"_psf_old.fits"])
 	
