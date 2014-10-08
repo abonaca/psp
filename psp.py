@@ -1,9 +1,10 @@
 from __future__ import print_function, division
 
 import os
-from shutil import copy
+from shutil import copy, move
 import subprocess
 from subprocess import call, Popen, PIPE
+import glob
 import string
 
 import numpy as np
@@ -33,11 +34,15 @@ class Dao(object):
 		self.opts = opts
 	
 	def init_names(self, fname):
+		"""Initialize filenames"""
 		# path to image
 		self.fname = fname
 		
-		# root name 
+		# name without extension
 		self.name = os.path.splitext(fname)[0]
+		
+		# only file name
+		self.ofname = os.path.splitext(os.path.split(fname)[1])[0]
 		
 		# working directory
 		self.dr = os.path.split(fname)[0]
@@ -47,9 +52,12 @@ class Dao(object):
 		if op_type not in OPTS_KEYS.keys():
 			print("options type needs to be one of the following: {0}".format(OPTS_KEYS.keys()))
 			return
-		
+			
 		if general_name:
-			optname = self.dr+op_type+".opt"
+			optname = op_type+".opt"
+			
+		if general_name & (self.cmd=='allstar'):
+			optname = self.dr+'/'+op_type+".opt"
 		
 		if optname==None:
 			self.optname = self.name.replace("/","").replace("..","")+op_type+".opt"
@@ -77,9 +85,12 @@ class Dao(object):
 		# build command
 		cmd = [self.cmd]
 		cmd.extend(args)
+		cwd = None
+		if (self.cmd == 'allstar') & (len(self.dr)>0):
+			cwd = self.dr
 		
 		# run command
-		p = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+		p = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, cwd=cwd)
 		stdoutdata, stderrdata=p.communicate(lines)
 		
 		# save log files
@@ -98,10 +109,17 @@ class Dao(object):
 	
 	def find_instream(self, stream, search_string):
 		"""Return index in stream where search_string ends"""
-		ind = string.find(stream, search_string)
-		s1 = ind + len(search_string)
+		s0 = string.find(stream, search_string)
+		s1 = s0 + len(search_string)
 		
-		return s1
+		return (s0, s1)
+	
+	def rm_duplicates(self, seq):
+		""" Not order preserving    """
+		keys = {}
+		for e in seq:
+			keys[e] = 1
+		return keys.keys()
 		
 class Find(Dao):
 	def __init__(self, opts):
@@ -132,7 +150,7 @@ END_DAOPHOT""".format(self.optname, self.opts['misc']['stacknum'], self.name)
 		stdout = self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
 		
 		search_string = "Sky mode and standard deviation = "
-		s1 = self.find_instream(stdout, search_string)
+		s1 = self.find_instream(stdout, search_string)[1]
 		self.opts['misc']['sky_mode'] = float(stdout[s1:s1+8])
 
 class Aper(Dao):
@@ -165,7 +183,7 @@ END_DAOPHOT""".format(self.optname, self.name)
 		stdout = self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
 		
 		search_string = "Estimated magnitude limit (Aperture 1): "
-		s1 = self.find_instream(stdout, search_string)
+		s1 = self.find_instream(stdout, search_string)[1]
 		self.opts['misc']['maglim'] = float(stdout[s1:s1+4])
 
 class PickStars(Dao):
@@ -187,12 +205,12 @@ attach {1}.fits
 pickpsf
 {1}.ap
 100,{2}
-{1}.lst1
+{1}.lst
 
 exit
 END_DAOPHOT""".format(self.optname, self.name, self.opts['misc']['maglim'])
 		
-		# call daophot find
+		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
 		
 class GetPSF(Dao):
@@ -205,6 +223,8 @@ class GetPSF(Dao):
 		self.write_opts('daophot', general_name=True)
 		self.write_opts('daophot', pars=self.opts['daophot'])
 		
+		silent_remove(self.name+".nei")
+		
 		# build call
 		lines="""options
 {0}
@@ -213,18 +233,176 @@ attach {1}.fits
 
 psf
 {1}.ap
-{1}.lst1
+{1}.lst
 {1}.psf
 
 exit
 END_DAOPHOT""".format(self.optname, self.name)
 		
-		# call daophot find
+		# call daophot cmd
+		stdout = self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
+		
+		# get a list of bad stars
+		search_string = " has a bad pixel:"
+		bad = []
+		snew = 0
+		s0, s1 = self.find_instream(stdout, search_string)
+		while s0>0:
+			s0 += snew
+			bad.append(stdout[s0-7:s0])
+			snew += s1
+			s0, s1 = self.find_instream(stdout[snew:], search_string)
+		
+		bad_list=self.rm_duplicates(bad)
+		
+		# get a list of bad psf stars
+		if not bad_list:
+			search_string = "Profile errors:"
+			s0 = self.find_instream(stdout, search_string)[1]
+			search_string = "Computed"
+			s1 = self.find_instream(stdout, search_string)[0]
+			
+			profile_errors = stdout[s0:s1].split()
+			sat = ["%7s"%(profile_errors[i - 1]) for i, x in enumerate(profile_errors) if x == "saturated"]
+			var = ["%7s"%(profile_errors[i - 2]) for i, x in enumerate(profile_errors) if x == "*" or x == "?"]
+			bad_list.extend(sat + var)
+		
+		return bad_list
+
+class GroupStars(Dao):
+	def __init__(self, opts):
+		super(GroupStars, self).__init__('daophot', opts)
+		
+	def __call__(self, fname):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		self.write_opts('daophot', general_name=True)
+		self.write_opts('daophot', pars=self.opts['daophot'])
+		
+		# build call
+		lines = """options
+{0}
+
+attach {1}.fits
+
+group
+{1}.ap
+{1}.psf
+0.1
+{1}.grp
+
+exit
+END_DAOPHOT""".format(self.optname, self.name)
+		
+		# call daophot cmd
+		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
+		
+		out = open(self.name+'.grpt', 'w')
+		f = open(self.name+'.grp', 'r')
+		for line in f:
+			if '-99.999' not in line:
+				out.write(line)
+		f.close()
+		out.close()
+		move(self.name+'.grpt', self.name+'.grp')
+
+class NStar(Dao):
+	def __init__(self, opts):
+		super(NStar, self).__init__('daophot', opts)
+		
+	def __call__(self, fname):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		self.write_opts('daophot', general_name=True)
+		self.write_opts('daophot', pars=self.opts['daophot'])
+		
+		# build call
+		lines = """options
+{0}
+
+attach {1}.fits
+
+nstar
+{1}.psf
+{1}.grp
+{1}.nst
+
+exit
+END_DAOPHOT""".format(self.optname, self.name)
+		
+		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
 
+class SubStar(Dao):
+	def __init__(self, opts):
+		super(SubStar, self).__init__('daophot', opts)
+		
+	def __call__(self, fname):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		self.write_opts('daophot', general_name=True)
+		self.write_opts('daophot', pars=self.opts['daophot'])
+		
+		# build call
+		lines = """options
+{0}
+
+attach {1}.fits
+
+substar
+{1}.psf
+{1}.nst
+y
+{1}.lst
+
+exit
+END_DAOPHOT""".format(self.optname, self.name)
+		
+		# call daophot cmd
+		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
+
+class Allstar(Dao):
+	def __init__(self, opts):
+		super(Allstar, self).__init__('allstar', opts)
+	
+	def __call__(self, fname):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		self.write_opts('allstar', pars=self.opts['allstar'], general_name=True)
+		
+		lines = """
+
+{0}.fits
+{0}.psf
+{0}.ap
+{0}.als
+{0}.sub.fits""".format(self.ofname)
+		
+		# call daophot cmd
+		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
+
+
 # general helper functions
+def rm_list(fname, bad_list, length=None):
+	"""Remove elements of bad_list from file fname
+	Assumes elements of bad_list are strings"""
+	
+	# find string length
+	if length==None:
+		length = len(bad_list[0])
+		
+	out = open(fname+'tmp', 'w')
+	f = open(fname, 'r')
+	for line in f:
+		if line[:7] not in bad_list:
+			out.write(line)
+	f.close()
+	out.close()
+	move(fname+'tmp', fname)
+
 def cleanup_files(fname, extensions):
 	"""Remove files with root fname and extensions"""
+	
 	for ext in extensions:
 		silent_remove(os.path.splitext(fname)[0]+".{0}".format(ext))
 
@@ -250,57 +428,116 @@ def set_indopts(fname, opts):
 		for i, key in enumerate(keys):
 			opts['daophot'][key] = op[i]
 
-def test():
+# testing
+def test(fname):
 	"""Testing new photometric pipeline"""
 	
 	# global options
-	opts = {'daophot': {'r_psf': 20, 'r_fit': 15}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'sigma_psf': 4.5, 'sigma_all': 2.5}}
+	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 1.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'sigma_psf': 4.5, 'sigma_all': 2.}}
 	
 	# image
-	fname = "test.fits"
+	#fname = "test.fits"
+	name = os.path.splitext(fname)[0]
+	dr = os.path.split(fname)[0]
+	ofname = os.path.basename(name)
 	
 	# individual options
 	set_indopts(fname, opts)
 	
 	# psf image (masked image)
 	os.system("python psf_mask.py {0} {1} {2} {3}".format(fname, opts['misc']['counts_limit'], opts['misc']['number_limit'], opts['daophot']['high_good']+1))
-	psfname = os.path.splitext(fname)[0]+"_psf.fits"
+	psfname = name + "_psf.fits"
+	
 	# if psf image not created, copy the original image
 	if os.path.isfile(psfname)==False:
 		copy(fname, psfname)
 		
 	# cleanup
-	cleanup_files(fname, ("log", "coo"))
-	cleanup_files(psfname, ("log", "coo"))
+	cleanup_files(fname, ("log", "coo", "ap", "psf", "inp", "als", "sub.fits"))
+	cleanup_files(psfname, ("log", "coo", "ap", "nei", "psf", "grp", "nst", "lst", "sub.fits"))
 	
 	# create photometry objects
-	f = Find(opts)
+	finder = Find(opts)
 	aper = Aper(opts)
 	pick = PickStars(opts)
 	psf = GetPSF(opts)
-	
+	group = GroupStars(opts)
+	nstar = NStar(opts)
+	sub = SubStar(opts)
+	astar = Allstar(opts)
+
+	# general options
+	opts['daophot']['sigma_th']=opts['misc']['sigma_all']
+
 	# initial find, to get fwhm
-	f(fname)
+	finder(fname)
 	aper(fname)
 	
 	# once initial find run, determine fwhm, update it in opts
 	
-	print(opts)
-	
 	# options for psf finding
 	opts['daophot']['sigma_th']=opts['misc']['sigma_psf']
 	
-	f(psfname)
+	# aperture photometry
+	finder(psfname)
 	aper(psfname)
+	
+	# build psf
+	print('building psf ...')
 	pick(psfname)
-	psf(psfname)
+	bad_list = psf(psfname)
 	
-	# print plog
+	# remove bad stars from list
+	while bad_list:
+		rm_list(name+"_psf.lst", bad_list)
+		bad_list = psf(psfname)
 	
-	# identify psf stars that have bad pixels and remove them from list
+	# create star groups
+	group(psfname)
 	
-	# check none left
+	# subtract neighbors
+	nstar(psfname)
+	sub(psfname)
 	
+	# use neighbor-subtracted image for measuring psf
+	move(name+"_psf.fits", name+"_psf_old.fits")
+	move(name+"_psfs.fits", psfname)
+	
+	# final psf
+	bad_list = psf(psfname)
+	
+	# remove bad stars from list
+	while bad_list:
+		rm_list(name+"_psf.lst", bad_list)
+		bad_list = psf(psfname)
+	
+	# rename psf
+	move(name+"_psf.psf", name+".psf")
+	
+	# run allstar
+	print('running allstar ...')
+	astar(fname)
+	
+	# remove options files
+	trash = glob.glob('*%s*.opt'%ofname)
+	#trash.extend(glob.glob('*.opt'))
+	trash.extend([name+"_psf.fits", name+"_psf_old.fits"])
+	
+	for t in trash:
+		silent_remove(t)
+	
+def test_dirs():
+	"""test code in a different directory"""
+	
+	# dir, caution, dir can't have too long name
+	dr = "test/"
+	f = glob.glob(dr+'*_?.fits')
+	f = sorted(f)
+	#print(f)
+	
+	for fname in f:
+		print(fname)
+		test(fname)
 	
 	
 	
