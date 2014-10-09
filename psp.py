@@ -266,7 +266,10 @@ END_DAOPHOT""".format(self.optname, self.ofname)
 			profile_errors = stdout[s0:s1].split()
 			sat = ["%7s"%(profile_errors[i - 1]) for i, x in enumerate(profile_errors) if x == "saturated"]
 			var = ["%7s"%(profile_errors[i - 2]) for i, x in enumerate(profile_errors) if x == "*" or x == "?"]
-			bad_list.extend(sat + var)
+			# only return bad_psf list if a required minimum of psf stars remains
+			fine = 0.5*(len(profile_errors) - 2*len(sat) - 3*len(var))
+			if fine>self.opts['misc']['minpsf']:
+				bad_list.extend(sat + var)
 		
 		return bad_list
 
@@ -438,7 +441,7 @@ def test(fname):
 	
 	## print to file, so there's a record of used options
 	# global options
-	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'sigma_psf': 4.5, 'sigma_all': 3.5}}
+	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5}}
 	
 	# image
 	#fname = "test.fits"
