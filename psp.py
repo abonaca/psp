@@ -388,6 +388,90 @@ class Allstar(Dao):
 		# call daophot cmd
 		self.run_cmd(lines, args=["<<", "END_DAOPHOT"])
 
+class Daomatch(Dao):
+	def __init__(self, opts):
+		super(Daomatch, self).__init__('daomatch', opts)
+	
+	def __call__(self, fname, fin):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		
+		auxlines = ""
+		for x in fin[1:]:
+			auxlines+="{0}\ny\n".format(x)
+		
+		lines = """{0}
+{1}
+{2}
+
+EOF""".format(fin[0], self.ofname, auxlines)
+		
+		# call daophot cmd
+		self.run_cmd(lines, args=["<<", "EOF"])
+
+class Daomaster(Dao):
+	def __init__(self, opts):
+		super(Daomaster, self).__init__('daomaster', opts)
+	
+	def __call__(self, fname, nfiles, index, idtrans):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		
+		# matching radius countdown
+		auxlines = "{0}\n".format(self.opts['misc']['r_match'])
+		for x in range(nfiles-1):
+			auxlines+="\n"
+		
+		for x in range(self.opts['misc']['r_match']-1, 2, -1):
+			auxlines+="{0}\n".format(x)
+		
+		for x in range(self.opts['misc']['repeat_2']):
+			auxlines+="2\n"
+			
+		for x in range(self.opts['misc']['repeat_1']):
+			auxlines+="1\n"
+			
+		auxlines+="0"
+		
+		lines = """{0}.mch
+{1}, {2}, {3}
+{4}
+{5}
+{6}
+y
+y
+{0}.mag{7:1d}
+y
+{0}.cor{7:1d}
+y
+{0}.raw{7:1d}
+y
+{0}.mch{7:1d}
+n
+n
+{8}
+EOF""".format(self.ofname, self.opts['misc']['min_frame'], self.opts['misc']['min_frac'], self.opts['misc']['enough_frame'], self.opts['misc']['max_sigma'], self.opts['misc']['degfree'], auxlines, index, idtrans)
+		
+		# call daophot cmd
+		self.run_cmd(lines, args=["<<", "EOF"])
+
+class Allframe(Dao):
+	def __init__(self, opts):
+		super(Allframe, self).__init__('allframe', opts)
+	
+	def __call__(self, fname, index):
+		"""Call daophot and run find command"""
+		self.init_names(fname)
+		self.write_opts('allframe', pars=self.opts['allframe'], general_name=True)
+		
+		lines = """
+{0}.mch{1:1d}
+{0}.mag{1:1d}
+EOF
+""".format(self.ofname, index)
+		
+		# call daophot cmd
+		self.run_cmd(lines, args=["<<", "EOF"])
 
 # general helper functions
 def rm_list(fname, bad_list, length=None):
@@ -435,8 +519,54 @@ def set_indopts(fname, opts):
 		for i, key in enumerate(keys):
 			opts['daophot'][key] = op[i]
 
+def lines_startwith(fin, begin, fout, toggle=True, skip=0):
+	"""print lines from file <fin> starting with string <begin>"""
+	out = open(fout, 'w')
+	f = open(fin, 'r')
+	
+	count=0
+	for line in f:
+		if count>=skip:
+			if line.startswith(begin) == toggle:
+				out.write(line.lstrip())
+				#print(line.lstrip(), end="")
+		count+=1
+	f.close()
+	out.close()
+
+def hmerge_files(files, fout):
+	"""Horizontally merge files
+	Parameters:
+	files - tuple of filenames to be merged
+	fout - name of the output file"""
+	
+	# number of files
+	nfile=len(files)
+	f = [open(fin, 'r') for fin in files]
+	out = open(fout, 'w')
+	
+	# number of lines in files
+	nline = len(list(f[0]))
+	f[0].seek(0, 0)
+	
+	# merge line by line
+	for i in range(nline):
+		line = ""
+		line += f[0].readline().rstrip('\n')
+		for i in range(1,nfile):
+			line += "  "
+			line += f[i].readline().rstrip('\n')
+		line += '\n'
+		out.write(line)
+		
+	# close
+	for i in range(nfile):
+		f[i].close()
+	out.close()
+	
+
 # testing
-def test(fname):
+def test_phot(fname):
 	"""Testing new photometric pipeline"""
 	
 	## print to file, so there's a record of used options
@@ -533,7 +663,77 @@ def test(fname):
 	
 	for t in trash:
 		silent_remove(t)
+
+def test_match(fname):
+	"""Test source matching with allframe"""
+	# global options
+	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5, 'min_frame': 1, 'min_frac': 0.1, 'enough_frame': 2, 'max_sigma': 10, 'degfree': 6, 'r_match': 15, 'repeat_2': 3, 'repeat_1': 30}}
 	
+	# cleanup
+	#cleanup_files(fname, ("log", "mch", "mag1", "raw1", "mch1", "cor1"))
+	#cleanup_files(fname, ("mtr", "mag2", "raw2", "mch2", "cor2"))
+	
+	# initialize names
+	name = os.path.splitext(fname)[0]
+	dr = os.path.split(fname)[0]
+	ofname = os.path.basename(name)
+	
+	# compile catalog list
+	
+	# first move to targeted directory
+	origwd = os.getcwd()
+	os.chdir(dr)
+	
+	# get & sort catalogs
+	catalogs = glob.glob("*.als")
+	catalogs = sorted(catalogs)
+	oldindex=[ i for i, x in enumerate(catalogs) if "r_1" in x][0]
+	catalogs.insert(0, catalogs.pop(oldindex))
+	nfiles = len(catalogs)
+	
+	# change back directory
+	os.chdir(origwd)
+	
+	## run daomatch 
+	#match = Daomatch(opts)
+	#match(fname, catalogs)
+	
+	## run daomaster
+	#master = Daomaster(opts)
+	#master(fname, nfiles, index=1, idtrans='n')
+	
+	## run allframe
+	#aframe = Allframe(opts)
+	#aframe(fname, index=1)
+	
+	## first move to targeted directory
+	#origwd = os.getcwd()
+	#os.chdir(dr)
+	
+	## get & sort catalogs
+	#catalogs = glob.glob("*.alf")
+	#catalogs = sorted(catalogs)
+	#oldindex=[ i for i, x in enumerate(catalogs) if "r_1" in x][0]
+	#catalogs.insert(0, catalogs.pop(oldindex))
+	#nfiles = len(catalogs)
+	
+	## change back directory
+	#os.chdir(origwd)
+	
+	## run daomatch 
+	#match = Daomatch(opts)
+	#match(fname, catalogs)
+	
+	## run daomaster
+	#master = Daomaster(opts)
+	#master(fname, nfiles, index=2, idtrans='y')
+	
+	# final catalog
+	lines_startwith(name+".raw2", "              ", fout=name+"_cs.temp")
+	lines_startwith(name+".raw2", "              ", fout=name+"_mag.temp", toggle=False, skip=2)
+	
+	hmerge_files((name+"_mag.temp", name+"_cs.temp"), fout=name+".cat")
+
 def test_dirs():
 	"""test code in a different directory"""
 	
@@ -546,7 +746,15 @@ def test_dirs():
 	for fname in f:
 		print(fname)
 		test(fname)
+
+import glob
+def scratch():
+	f = glob.glob("test/*opt")
+	f = sorted(f)
+	print(f)
 	
+	base = [os.path.splitext(x)[0] for x in f]
+	print(base)
 	
 	
 	
