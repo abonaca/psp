@@ -8,6 +8,8 @@ import glob
 import string
 
 import numpy as np
+from astropy.io import fits
+from scipy.optimize import leastsq
 
 pi=3.14159265359
 
@@ -564,6 +566,82 @@ def hmerge_files(files, fout):
 		f[i].close()
 	out.close()
 	
+def get_fwhm(name, rfit=20):
+	ids, x, y, dm, sharp, rnd = load_starlist(name+".coo")
+	
+	# select bright stars
+	bright = (dm<-1.5) & (sharp<1) & (sharp>0.5) & (rnd<0.3) & (rnd>-0.3)
+	
+	# relax roundness constraint if too few stars selected
+	if np.sum(bright)<50:
+		bright = (dm<-1.5) & (sharp<1) & (sharp>0.5) & (rnd<0.7) & (rnd>-0.7)
+		
+	xb = x[bright]
+	yb = y[bright]
+	Nb = np.size(xb)
+	fwhm = np.zeros((Nb, 2))
+	
+	# load data
+	hdulist = fits.open(name+".fits")
+	data = hdulist[0].data
+	
+	for i in range(Nb):
+		fwhm[i] = fitgaussian(data, xb, yb, rfit, i)
+	
+	hdulist.close()
+	
+	# median fwhm for bright stars (along x & y directions)
+	fwhm_med = np.median(fwhm)
+	
+	## make sure fwhm is reasonable
+	#if (fwhm_med<2) or (fwhm_med>20):
+		#fwhm_med = 5.
+	
+	return(fwhm_med)
+
+def load_starlist(fcoo):
+	"""Return starlist for the image"""
+	ids, x, y, dm, sharp, rnd = np.loadtxt(fcoo, skiprows=3, usecols=(0,1,2,3,4,5), unpack=True)
+	x -= 1
+	y -= 1
+	return (ids, x, y, dm, sharp, rnd)
+
+def fitgaussian(fulldata, xs, ys, rfit, n):
+	"""Returns (height, x, y, width_x, width_y, const)
+	the gaussian parameters of a 2D distribution found by a fit"""
+	Ny, Nx = np.shape(fulldata)
+	xc, yc = (xs[n], ys[n])
+	
+	x0 = xc - rfit
+	x1 = xc + rfit
+	y0 = yc - rfit
+	y1 = yc + rfit
+	
+	if x0<0:
+		x0=0
+	if y0<0:
+		y0=0
+	if x1>=Nx:
+		x1=Nx-1
+	if y1>=Ny:
+		y1=Ny-1
+	
+	#print(xc, yc, rfit, x0, x1, y0, y1)
+	data=fulldata[y0:y1,x0:x1]
+	
+	#initial guesses
+	params = [np.max(data), rfit, rfit, 0.1*rfit, 0.1*rfit, np.median(data)]
+	
+	errorfunction = lambda p: np.ravel(gaussian(*p[:5])(*np.indices(data.shape)) + params[-1] - data)
+	p, success = leastsq(errorfunction, params)
+	fwhm = 2*np.sqrt(2.*np.log(2.))*p[3:5]
+	return np.abs(fwhm)
+
+def gaussian(height, center_x, center_y, width_x, width_y):
+	"""Returns a gaussian function with the given parameters"""
+	width_x = float(width_x)
+	width_y = float(width_y)
+	return lambda x,y: height*np.exp(-(((center_x-x)/width_x)**2+((center_y-y)/width_y)**2)/2)
 
 # testing
 def test_phot(fname):
@@ -571,7 +649,7 @@ def test_phot(fname):
 	
 	## print to file, so there's a record of used options
 	# global options
-	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5}}
+	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 1.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5, 'r_see': 20}}
 	
 	# image
 	#fname = "test.fits"
@@ -611,7 +689,10 @@ def test_phot(fname):
 	finder(fname)
 	aper(fname)
 	
-	## once initial find run, determine fwhm, update it in opts
+	# measure seeing and update daophot fwhm
+	print(opts['daophot']['fwhm'])
+	opts['daophot']['fwhm'] = get_fwhm(name, rfit=opts['misc']['r_see'])
+	print(opts['daophot']['fwhm'])
 	
 	# options for psf finding
 	opts['daophot']['sigma_th']=opts['misc']['sigma_psf']
@@ -679,20 +760,12 @@ def test_match(fname):
 	ofname = os.path.basename(name)
 	
 	# compile catalog list
-	
-	# first move to targeted directory
-	origwd = os.getcwd()
-	os.chdir(dr)
-	
-	# get & sort catalogs
-	catalogs = glob.glob("*.als")
+	catalogs = glob.glob(dr+"/*.als")
 	catalogs = sorted(catalogs)
 	oldindex=[ i for i, x in enumerate(catalogs) if "r_1" in x][0]
 	catalogs.insert(0, catalogs.pop(oldindex))
+	catalogs = [os.path.basename(x) for x in catalogs]
 	nfiles = len(catalogs)
-	
-	# change back directory
-	os.chdir(origwd)
 	
 	## run daomatch 
 	#match = Daomatch(opts)
