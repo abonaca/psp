@@ -6,6 +6,7 @@ import subprocess
 from subprocess import call, Popen, PIPE
 import glob
 import string
+import pickle
 
 import numpy as np
 from astropy.io import fits
@@ -646,16 +647,15 @@ def gaussian(height, center_x, center_y, width_x, width_y):
 # testing
 def test_phot(fname):
 	"""Testing new photometric pipeline"""
-	
-	## print to file, so there's a record of used options
-	# global options
-	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 1.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5, 'r_see': 20}}
-	
-	# image
+
+	# image names
 	#fname = "test.fits"
 	name = os.path.splitext(fname)[0]
 	dr = os.path.split(fname)[0]
 	ofname = os.path.basename(name)
+	
+	# global options
+	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 1.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5, 'r_see': 20}}
 	
 	# individual options
 	set_indopts(fname, opts)
@@ -690,9 +690,10 @@ def test_phot(fname):
 	aper(fname)
 	
 	# measure seeing and update daophot fwhm
-	print(opts['daophot']['fwhm'])
 	opts['daophot']['fwhm'] = get_fwhm(name, rfit=opts['misc']['r_see'])
-	print(opts['daophot']['fwhm'])
+	
+	# save options to file
+	pickle.dump(opts, open(name+".opts", "wb" ) )
 	
 	# options for psf finding
 	opts['daophot']['sigma_th']=opts['misc']['sigma_psf']
