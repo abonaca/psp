@@ -15,7 +15,7 @@ from scipy.optimize import leastsq
 pi=3.14159265359
 
 # define options keys and default values for 4 types of options files
-OPTS_DEFAULT = {'daophot': {'read_noise': 6.70, 'gain': 4.20, 'low_good': 7.00, 'high_good': 32766.50, 'fwhm': 2.50, 'sigma_th': 4.00, 'low_sharp': 0.30, 'high_sharp':1.40, 'low_round': -1.00, 'high_round':1.00, 'watch':0.00, 'r_fit': 15.00, 'r_psf': 20.00, 'var_psf': 2.00, 'sky': 0.00, 'psf_model': 5.00, 'psf_clean': 5.00, 'use_sat': 0.00, 'err_percent': 0.75, 'err_profile': 5.00},
+OPTS_DEFAULT = {'daophot': {'read_noise': 6.70, 'gain': 4.20, 'low_good': 7.00, 'high_good': 32766.50, 'fwhm': 2.50, 'sigma_th': 4.00, 'low_sharp': 0.30, 'high_sharp':1.40, 'low_round': -1.00, 'high_round':1.00, 'watch':0.00, 'r_fit': 15.00, 'r_psf': 20.00, 'var_psf': 2.00, 'sky': 0.00, 'psf_model': 1.00, 'psf_clean': 5.00, 'use_sat': 0.00, 'err_percent': 0.75, 'err_profile': 5.00},
 'photo': {'a1': 3, 'a2': 4, 'a3': 5, 'a4': 6, 'a5': 7, 'a6': 8, 'a7': 10, 'a8': 11, 'a9': 12, 'aa': 13, 'ab': 14, 'ac': 15, 'inner_sky': 20., 'outer_sky': 35.},
 'allstar': {'r_fit': 15.00, 'clip_exp': 6.00, 'redet_centroid': 1.00, 'clip_range': 2.50, 'watch': 0.00, 'group_max': 50.00, 'err_percent': 0.75, 'err_profile': 5.00, 'inner_sky': 20., 'outer_sky': 35.},
 'allframe': {'clip_exp': 6.00, 'clip_range': 2.50, 'geo_coeff': 6.00, 'watch': 0.00, 'iter_min': 5, 'iter_max': 200, 'err_percent': 0.75, 'err_profile': 5.00, 'inner_sky': 20., 'outer_sky': 35.}}
@@ -188,7 +188,7 @@ END_DAOPHOT""".format(self.optname, self.ofname)
 		
 		search_string = "Estimated magnitude limit (Aperture 1): "
 		s1 = self.find_instream(stdout, search_string)[1]
-		self.opts['misc']['maglim'] = float(stdout[s1:s1+4])
+		self.opts['misc']['maglim'] = float(stdout[s1:s1+4])-2.
 
 class PickStars(Dao):
 	def __init__(self, opts):
@@ -269,6 +269,8 @@ END_DAOPHOT""".format(self.optname, self.ofname)
 			profile_errors = stdout[s0:s1].split()
 			sat = ["%7s"%(profile_errors[i - 1]) for i, x in enumerate(profile_errors) if x == "saturated"]
 			var = ["%7s"%(profile_errors[i - 2]) for i, x in enumerate(profile_errors) if x == "*" or x == "?"]
+			#rvar = ["%7s"%(profile_errors[i - 1]) for i, x in enumerate(profile_errors) if (float(x) > 0.05) & (float(x) < 1.)]
+			
 			# only return bad_psf list if a required minimum of psf stars remains
 			fine = 0.5*(len(profile_errors) - 2*len(sat) - 3*len(var))
 			if fine>self.opts['misc']['minpsf']:
@@ -521,6 +523,9 @@ def set_indopts(fname, opts):
 		op = np.loadtxt(info)
 		for i, key in enumerate(keys):
 			opts['daophot'][key] = op[i]
+	
+	# daophot expects readnoise in units of ADU, while header provides in units of electrons
+	opts['daophot']['read_noise'] /= opts['daophot']['gain']
 
 def lines_startwith(fin, begin, fout, toggle=True, skip=0):
 	"""print lines from file <fin> starting with string <begin>"""
@@ -655,7 +660,7 @@ def test_phot(fname):
 	ofname = os.path.basename(name)
 	
 	# global options
-	opts = {'daophot': {'r_psf': 20, 'r_fit': 15, 'fwhm': 3.5, 'psf_model': 1.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 4.5, 'sigma_all': 3.5, 'r_see': 20}}
+	opts = {'daophot': {'r_psf': 25, 'r_fit': 20, 'fwhm': 3.5, 'psf_model': 7.00, 'var_psf':0., 'psf_clean':50., 'err_percent': 0.75, 'err_profile': 5.00}, 'photo': {}, 'allstar': {}, 'allframe': {}, 'misc': {'stacknum': 1, 'counts_limit': 15000, 'number_limit': 400, 'minpsf': 35, 'sigma_psf': 10., 'sigma_all': 3., 'r_see': 20}}
 	
 	# individual options
 	set_indopts(fname, opts)
@@ -688,6 +693,9 @@ def test_phot(fname):
 	# initial find, to get fwhm
 	finder(fname)
 	aper(fname)
+	
+	#opts['misc']['maglim']=15.5
+	#print(opts['misc']['maglim'])
 	
 	# measure seeing and update daophot fwhm
 	opts['daophot']['fwhm'] = get_fwhm(name, rfit=opts['misc']['r_see'])
@@ -733,6 +741,9 @@ def test_phot(fname):
 	
 	# rename psf
 	move(name+"_psf.psf", name+".psf")
+	#copy(name+".psf", name+".psf_orig")
+	#move(name+".psf_edit", name+".psf")
+	#copy("/home/ana/projects/pal5/data/images/09/01/0/"+ofname+".psf", name+".psf")
 	
 	# run allstar
 	print('running allstar ...')
