@@ -649,6 +649,80 @@ def gaussian(height, center_x, center_y, width_x, width_y):
 	width_y = float(width_y)
 	return lambda x,y: height*np.exp(-(((center_x-x)/width_x)**2+((center_y-y)/width_y)**2)/2)
 
+def loaddaotxt(fname, usecols=None, unpack=False):
+	"""Read aperture photometry file"""
+	
+	f = open(fname, 'r')
+	
+	# skip first line
+	f.readline()
+	
+	# get number of lines per star
+	line = f.readline()
+	Nl = int(string2array(line)[0])
+	dline = [None]*Nl
+	
+	# skip empty lines
+	l1 = f.readline()
+	while len(l1.replace(" ","").replace("\n",""))==0:
+		l1 = f.readline()
+	
+	# load first data line
+	d1 = string2array(l1)
+	l2 = f.readline()
+	d2 = string2array(l2)
+	data = np.concatenate((d1,d2))
+	data = np.array([data])
+	
+	# load subsequent data lines
+	l = 0
+	d = np.empty(0)
+	
+	for line in f:
+		
+		#only load non-empty lines
+		if len(line.replace("\n",""))>0:
+			ind = l%Nl
+			dline[ind] = string2array(line)
+			
+			if ind==Nl-1:
+				# combine parts of the line
+				for i in range(Nl):
+					d = np.concatenate((d,dline[i]))
+				d = [d]
+				
+				# add line to the data matrix
+				data = np.concatenate((data,d),axis=0)
+				d = np.empty(0)
+			l += 1
+	f.close()
+	
+	# transpose data matrix
+	if unpack==True:
+		data = data.T
+	
+	# extract requested columns
+	if usecols!=None:
+		retdat = []
+		for c in usecols:
+			retdat.append(data[c])
+	else:
+		retdat = data
+	
+	return retdat
+
+def string2array(line):
+	"""Transform a list of strings into a numpy array"""
+	
+	# remove spaces and return
+	lst = str.split(line.replace("\n","")," ")
+	lst = filter(lambda a: a != "", lst)
+	
+	# cast on float
+	lst = [float(x) for x in lst]
+	
+	return np.array(lst)
+
 # testing
 def test_phot(fname):
 	"""Testing new photometric pipeline"""
